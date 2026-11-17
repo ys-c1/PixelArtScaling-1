@@ -1,0 +1,951 @@
+#!/usr/bin/env python3
+
+"""
+=======
+ScaleNx
+=======
+
+--------------------------------
+Scaler Vi - Visual ScaleNx shell
+--------------------------------
+
+**Scaler Vi**_sual_ is a visual GUI shell for `ScaleNx`_ module.
+Unlike main GUI shell (ScaleNxGUI.py), it is equipped with preview widget
+and allows switching between scaling algorithms to compare result visually,
+thus previewing scaling result before saving (or not saving) it.
+
+Beware that "fast switching" may be quite slow for a big image. Also
+remember that generating preview takes additional CPU time and,
+most important, memory; therefore it is **not recommended**
+to use *Scaler Vi* for **big images**.
+
+Use *ScaleNxGUI.py* for big images instead.
+
+File formats
+------------
+
+Input: PNG, PPM, PGM, PBM.
+
+Output: PNG, PPM, PGM.
+
+History:
+--------
+
+- 25.10.20.14 Initial version of ScaleNx host with preview - 20 Oct 2025.
+- 25.11.7.1   Release 7 Nov 2025.
+- 26.1.14.6   Suitable filter execution time display added to info string.
+Result may be copied to clipboard by *`Ctrl`+`Click`*-ink info label.
+- 26.1.20.22  Extended zoom out range for big images.
+- 26.1.26.1   Cleansing and harmonization.
+- 26.2.11.19  Changes to new ScaleNx import structure reduced code length.
+- 26.5.9.9    Internal GUI code changes to facilitate further development.
+- 26.5.26.9   Introducing draggable canvas (somewhat jaggy).
+- 26.9.19.19  Introducing modular GUI, potentially giving more room for
+image preview. Until final conclusion on suitability is made, both versions
+will coexist, starting with `--makeup` and `--classic` switches.
+
+----
+Main site: `The Toad's Slimy Mudhole`_
+
+.. _The Toad's Slimy Mudhole: https://dnyarri.github.io
+
+`ScaleNx`_ explanations and illustrations page.
+
+.. _ScaleNx: https://dnyarri.github.io/scalenx.html
+
+ScaleNx Git repositories: `ScaleNx@Github`_, `ScaleNx@Gitflic`_.
+
+.. _ScaleNx@Github: https://github.com/Dnyarri/PixelArtScaling
+
+.. _ScaleNx@Gitflic: https://gitflic.ru/project/dnyarri/pixelartscaling
+
+"""
+
+__author__ = 'Ilya Razmanov'
+__copyright__ = '(c) 2025-2026 Ilya Razmanov'
+__credits__ = 'Ilya Razmanov'
+__license__ = 'unlicense'
+__version__ = '26.11.7.17'
+__maintainer__ = 'Ilya Razmanov'
+__email__ = 'ilyarazmanov@gmail.com'
+__status__ = 'Production'
+
+import argparse
+from copy import deepcopy
+from pathlib import Path
+from random import randbytes  # Used for random icon only
+from time import ctime, time
+from tkinter import Button, Canvas, Frame, Label, LabelFrame, Menu, Menubutton, OptionMenu, PhotoImage, StringVar, TclError, Tk, Toplevel
+from tkinter.filedialog import askopenfilename, asksaveasfilename
+from tkinter.messagebox import showinfo
+
+from pypng import list2png, png2list
+from pypnm import list2bin, list2pnm, pnm2list
+from scalenx import scaleNx  # Configurable ScaleNx as of 2026.2.11.19
+
+""" ╔══════════════════════════════════╗
+    ║ GUI events and functions thereof ║
+    ╚══════════════════════════════════╝ """
+
+
+def DisMiss(event=None) -> None:
+    """Kill dialog and continue."""
+
+    sortir.destroy()
+
+
+def ShowMenu(event) -> None:
+    """Pop menu up (or sort of drop it down)."""
+
+    menu_file.post(event.x_root, event.y_root)
+
+
+def ShowInfo(event=None) -> None:
+    """Show image information."""
+
+    file_size = Path(sourcefilename).stat().st_size
+    file_size_str = f'{file_size / 1048576:.2f} Mb' if (file_size > 1048576) else f'{file_size / 1024:.2f} Kb' if (file_size > 1024) else f'{file_size} bytes'
+    showinfo(
+        title='Image information',
+        message=f'File properties:\nLocation: {sourcefilename}\nSize: {file_size_str}\nLast modified: {ctime(Path(sourcefilename).stat().st_mtime)}',
+        detail=f'Image properties, as represented internally:\nStatus: {is_filtered=}, {is_saved=}\nWidth: {X} px\nHeight: {Y} px\nChannels: {Z} channel{"s" if Z > 1 else ""}\nColor depth: {maxcolors + 1} gradations/channel',
+    )
+
+
+def ShowHelp(event=None) -> None:
+    """Show some help info."""
+
+    showinfo(
+        title=f'{product_name} quick help',
+        message=f'{product_name} {__version__} is a visual GUI shell for ScaleNx module, equipped with preview widget.\nMain GUI functions are listed below:',
+        detail=help_str,
+    )
+
+
+def UINormal() -> None:
+    """Normal UI state, buttons enabled."""
+
+    info_string.config(text=info_normal['txt'], foreground=info_normal['fg'], background=info_normal['bg'])
+    whoever['cursor'] = sortir['cursor'] = zanyato['cursor'] = ''
+    method_menu['state'] = info_method['state'] = zanyato['state'] = 'normal'
+    sortir.update()
+
+
+def UIBusy() -> None:
+    """Busy UI state, buttons disabled."""
+
+    info_string.config(text=info_busy['txt'], foreground=info_busy['fg'], background=info_busy['bg'])
+    try:  # trying to be cross-platform, based on ``Python312\tcl\tk8.6\ttk\cursors.tcl``
+        whoever['cursor'] = sortir['cursor'] = zanyato['cursor'] = 'wait'
+    except TclError:
+        whoever['cursor'] = sortir['cursor'] = zanyato['cursor'] = 'watch'
+    method_menu['state'] = info_method['state'] = zanyato['state'] = 'disabled'
+    sortir.update()
+
+
+def UIFit() -> None:
+    """Readopting 'sortir.minsize' to fit the screen."""
+
+    sortir.update()
+    fit_width, fit_height = (
+        min(sortir.winfo_reqwidth(), sortir.winfo_screenwidth() - 16),
+        min(sortir.winfo_reqheight(), sortir.winfo_screenheight() - 96),
+    )
+    sortir.minsize(fit_width, fit_height)
+    sortir.geometry(f'{sortir.winfo_reqwidth()}x{sortir.winfo_reqheight()}')
+    sortir.update()
+
+
+def canvasCoord(event):
+    """Marking 'canvas' view point for further dragging."""
+
+    canvas.scan_mark(event.x, event.y)
+
+
+def canvasDrag(event):
+    """Dragging 'canvas' Canvas."""
+
+    canvas.scan_dragto(
+        event.x,
+        event.y,
+        gain=1,
+    )
+    canvas['cursor'] = 'fleur'
+
+
+def ShowPreview(preview_choice: PhotoImage, caption: str) -> None:
+    """Show 'preview_choice' PhotoImage, trying to fit 'zanyato' to screen."""
+
+    global preview
+
+    preview = preview_choice
+    frame_preview.config(text=f'{caption}')
+    if zoom_factor > 0:
+        preview = preview.zoom(zoom_factor + 1)
+        label_zoom['text'] = f'{caption} {zoom_factor + 1}:1'
+    elif zoom_factor < 0:
+        preview = preview.subsample(1 - zoom_factor)
+        label_zoom['text'] = f'{caption} 1:{1 - zoom_factor}'
+    else:
+        label_zoom['text'] = f'{caption} 1:1'
+
+    # ↓ Sizes of preview to fit the screen
+    preview_width, preview_height = (
+        min(preview.width(), sortir.winfo_screenwidth() - 16),
+        min(preview.height(), sortir.winfo_screenheight() - control_height - info_string.winfo_height() - frame_zoom.winfo_reqheight() - 96),
+    )
+    zanyato.config(
+        image=preview,
+        relief='flat',
+        borderwidth=0,
+    )
+    canvas.config(
+        width=preview_width,
+        height=preview_height,  # Note that 'scrollregion' may be bigger than canvas!
+        scrollregion=(0, 0, preview.width(), preview.height()),
+        cursor='arrow',
+    )
+    canvas.itemconfig(  # configuring 'zanyato' size normally doesn't work on canvas
+        zanyato_,
+        width=preview.width(),
+        height=preview.height(),
+    )
+
+
+def SwitchView(event=None) -> None:
+    """Switch preview between preview_src and preview_filtered."""
+
+    global view_src
+    global xs, ys, xr, yr
+
+    view_src = not view_src  # cycling before ⇄ after
+    if view_src:
+        xr, yr = canvas.xview()[0], canvas.yview()[0]  # remember x, y for result image before switch to source
+        ShowPreview(preview_src, 'Source')  # switch to source
+        canvas.xview_moveto(xs)  # restore x, y for source image after switch to source
+        canvas.yview_moveto(ys)
+    else:
+        xs, ys = canvas.xview()[0], canvas.yview()[0]  # remember x, y for source image before switch to result
+        ShowPreview(preview_filtered, 'Result')  # switch to result
+        canvas.xview_moveto(xr)  # restore x, y for result image after switch to result
+        canvas.yview_moveto(yr)
+    UIFit()
+    sortir.geometry(f'{sortir.winfo_reqwidth()}x{sortir.winfo_reqheight()}')
+
+
+def GetSource(event=None) -> None:
+    """Open source image and redefine other controls state."""
+
+    global zoom_factor, view_src, is_filtered, is_saved, info_normal, color_mode_str, operation, timing
+    global preview, preview_src, preview_filtered  # preview and copies of preview
+    global sourcefilename, X, Y, Z, maxcolors, source_image, info
+    global result_image
+
+    operation = 'Opening'
+
+    # ↓ Temporary saving info in case of "Open.." cancel
+    old_sourcefilename = sourcefilename
+    # ↓ Opening "Open.." dialog
+    sourcefilename = askopenfilename(
+        title='Open image file to rescale',
+        parent=whoever,
+        filetypes=[
+            ('Supported formats', '.png .ppm .pgm .pbm .pnm'),
+            ('Portable network graphics', '.png'),
+            ('Portable any map', '.ppm .pgm .pbm .pnm'),
+        ],
+    )
+    if sourcefilename == '':
+        sourcefilename = old_sourcefilename
+        return
+    # ↓ Next must be set AFTER "sourcefilename", in case of "Open.." cancel
+    zoom_factor = 0
+    view_src = True
+    is_filtered = is_saved = False
+
+    UIBusy()
+    start = time()
+    if Path(sourcefilename).suffix.lower() == '.png':
+        # ↓ Reading PNG image as list
+        X, Y, Z, maxcolors, source_image, info = png2list(sourcefilename, tuplevel='image')
+
+    elif Path(sourcefilename).suffix.lower() in ('.ppm', '.pgm', '.pbm', '.pnm'):
+        # ↓ Reading PNM image as list
+        X, Y, Z, maxcolors, source_image = pnm2list(sourcefilename, tuplevel='image')
+        # ↓ Creating dummy info required to correctly Save As PNG later.
+        #   Fixing color mode, the rest is fixed with pnglpng v. 25.01.07.
+        info = {'bitdepth': 16} if maxcolors > 255 else {'bitdepth': 8}
+
+    else:
+        raise ValueError('Extension not recognized')
+    timing = time() - start
+
+    # ↓ Creating deep copy of source 3D list
+    #   to avoid accumulating repetitive filtering.
+    result_image = deepcopy(source_image)
+
+    """ ┌───────────────┐
+        │ Viewing image │
+        └───────────────┘ """
+    # ↓ Converting list to bytes of PNM-like structure "preview_data" in memory
+    preview_data = list2bin(result_image, maxcolors, show_chessboard=True)
+    # ↓ Now generating preview from "preview_data" bytes using Tkinter
+    preview = PhotoImage(data=preview_data)
+
+    # ↓ Creating copy of source preview for further
+    #   fast switch between source and result.
+    preview_src = preview_filtered = preview
+
+    # ↓ Calculate zoom factor for ShowPreview below ("Zoom to fit").
+    if preview.width() > sortir.winfo_screenwidth() or (128 + preview.height() + control_height) > sortir.winfo_screenheight():
+        zoom_factor = max(-max(preview.width() // sortir.winfo_screenwidth(), (128 + preview.height() + control_height + frame_zoom.winfo_reqheight() + info_string.winfo_reqheight()) // sortir.winfo_screenheight()), minizoom)
+
+    # ↓ Finally the show part
+    ShowPreview(preview, 'Source')
+
+    # ↓ Binding preview click and mouse drag
+    for happens, function in bind.items():
+        zanyato.bind(happens, function)
+    zanyato.bind('<ButtonRelease-1>', lambda event: canvas.config(cursor='arrow'))  # cursor back after drag
+    sortir.bind_all('<MouseWheel>', zoomWheel)  # Wheel scroll
+    sortir.bind_all('<Control-i>', ShowInfo)
+    menu_file.entryconfig('Image Info...', state='normal')
+    # ↓ Binding global
+    sortir.bind_all('<Return>', RunFilter)
+    # ↓ Resetting menu to 'None' for every image
+    method_str.set('None')
+    # ↓ Enabling 'Save as...'
+    menu_file.entryconfig('Save as...', state='normal')
+    sortir.bind_all('<Control-Shift-S>', SaveAs)
+    # ↓ Enabling zoom buttons
+    butt_plus.config(state='normal', cursor='hand2')
+    butt_minus.config(state='normal', cursor='hand2')
+    # ↓ Adding filename, mode and status to window title a-la Photoshop
+    if Z == 1:
+        color_mode_str = f' (L:{"8" if maxcolors < 256 else "16"})'
+    elif Z == 2:
+        color_mode_str = f' (LA:{"8" if maxcolors < 256 else "16"})'
+    elif Z == 3:
+        color_mode_str = f' (RGB:{"8" if maxcolors < 256 else "16"})'
+    elif Z == 4:
+        color_mode_str = f' (RGBA:{"8" if maxcolors < 256 else "16"})'
+    else:
+        color_mode_str = ''  # Just in case
+    sortir.title(f'{"" if makeup else f"{product_name}: "}{Path(sourcefilename).name}{color_mode_str}{"*" if is_filtered else ""}{f" | {product_name}" if makeup else ""}')
+    info_normal = {'txt': f'{Path(sourcefilename).name}{"*" if is_filtered else ""} X={X} Y={Y} Z={Z} maxcolors={maxcolors}', 'fg': 'grey', 'bg': 'grey90'}
+    UINormal()
+    UIFit()
+    sortir.geometry(f'{sortir.winfo_reqwidth()}x{sortir.winfo_reqheight()}')
+
+
+def RunFilter(event=None) -> None:
+    """Filter image, then preview result."""
+
+    global view_src, is_filtered, is_saved, info_normal, operation, timing
+    global preview_filtered
+    global X, Y, Z
+    global result_image
+    global xs, ys, xr, yr  # view point coordinates in *s*ource and *r*esult image  # noqa: PLW0602
+
+    xs, ys = canvas.xview()[0], canvas.yview()[0]  # remember view point coordinates before anything happens
+
+    method = method_str.get()
+
+    UIBusy()
+
+    """ ┌─────────────────┐
+        │ Filtering image │
+        └─────────────────┘ """
+
+    if method == 'Scale2x':
+        n = 2
+        sfx = False
+    elif method == 'Scale3x':
+        n = 3
+        sfx = False
+    elif method == 'Scale2xSFX':
+        n = 2
+        sfx = True
+    elif method == 'Scale3xSFX':
+        n = 3
+        sfx = True
+
+    if method == 'None':
+        result_image = source_image
+    else:
+        operation = 'Scaling'
+        start = time()
+        result_image = scaleNx(source_image, n=n, sfx=sfx)
+        timing = time() - start
+        if 'physical' in info:  # Fixing resolution to match original print size
+            x_pixels_per_unit, y_pixels_per_unit, unit_is_meter = info['physical']
+        else:  # Assume 3780 px/meter (96 px/inch) as original
+            x_pixels_per_unit = y_pixels_per_unit = 3780
+            unit_is_meter = True
+        info['physical'] = [n * x_pixels_per_unit, n * y_pixels_per_unit, unit_is_meter]
+
+    Y, X, Z = (len(source_image), len(source_image[0]), len(source_image[0][0]))
+    YNEW, XNEW = (len(result_image), len(result_image[0]))
+
+    # ↓ Flagging as filtered, not saved
+    if method != 'None':
+        is_filtered = True
+        is_saved = view_src = False
+        # ↓ Enabling save
+        menu_file.entryconfig('Save', state='normal')
+        sortir.bind_all('<Control-s>', Save)
+
+        # ↓ Preview result
+        preview_data = list2bin(result_image, maxcolors, show_chessboard=True)
+        preview_filtered = PhotoImage(data=preview_data)
+
+        ShowPreview(preview_filtered, 'Result')
+
+        # ↓ Binding preview switch
+        sortir.bind_all('<space>', SwitchView)  # "Space" key
+
+    else:
+        is_filtered = False
+        is_saved = view_src = True
+        # ↓ Disabling save
+        menu_file.entryconfig('Save', state='disabled')
+        sortir.unbind_all('<Control-s>')
+        sortir.unbind_all('<space>')  # "Space" key
+        # ↓ Preview source
+        ShowPreview(preview_src, 'Source')
+
+    # ↓ Adding filename, mode and status to window title a-la Photoshop
+    sortir.title(f'{"" if makeup else f"{product_name}: "}{Path(sourcefilename).name}{color_mode_str}{"*" if is_filtered else ""}{f" | {product_name}" if makeup else ""}')
+    info_normal = {'txt': f'{Path(sourcefilename).name}{"*" if is_filtered else ""} X={XNEW if is_filtered else X} Y={YNEW if is_filtered else Y} Z={Z} maxcolors={maxcolors}', 'fg': 'grey', 'bg': 'grey90'}
+    UINormal()
+    UIFit()
+    zanyato.focus_set()  # moving focus to preview
+
+
+def zoomIn(event=None) -> None:
+    """Zoom preview in."""
+
+    global zoom_factor
+
+    zoom_factor = min(zoom_factor + 1, maxizoom)  # max zoom 5
+
+    if view_src:
+        ShowPreview(preview_src, 'Source')
+    else:
+        ShowPreview(preview_filtered, 'Result')
+
+    # ↓ reenabling +/- buttons
+    butt_minus.config(state='normal', cursor='hand2')
+    if zoom_factor == maxizoom:  # max zoom 5
+        butt_plus.config(state='disabled', cursor='arrow')
+    else:
+        butt_plus.config(state='normal', cursor='hand2')
+    UIFit()
+
+
+def zoomOut(event=None) -> None:
+    """Zoom preview out."""
+
+    global zoom_factor
+
+    zoom_factor = max(zoom_factor - 1, minizoom)  # min zoom 1/20
+
+    if view_src:
+        ShowPreview(preview_src, 'Source')
+    else:
+        ShowPreview(preview_filtered, 'Result')
+
+    # ↓ reenabling +/- buttons
+    butt_plus.config(state='normal', cursor='hand2')
+    if zoom_factor == minizoom:  # min zoom 1/20
+        butt_minus.config(state='disabled', cursor='arrow')
+    else:
+        butt_minus.config(state='normal', cursor='hand2')
+    UIFit()
+
+
+def zoomOne(event=None) -> None:
+    """Zoom 1:1."""
+
+    global zoom_factor
+
+    zoom_factor = 0
+
+    if view_src:
+        ShowPreview(preview_src, 'Source')
+    else:
+        ShowPreview(preview_filtered, 'Result')
+
+    # ↓ reenabling +/- buttons
+    butt_plus.config(state='normal', cursor='hand2')
+    butt_minus.config(state='normal', cursor='hand2')
+    UIFit()
+
+
+def zoomWheel(event) -> None:
+    """zoomIn or zoomOut by mouse wheel."""
+
+    if event.delta < 0:
+        zoomOut()
+    if event.delta > 0:
+        zoomIn()
+
+
+def onSave() -> None:
+    """Reassign images and other objects from new to old upon saving."""
+
+    global preview_src, info_normal
+    global sourcefilename, X, Y, Z, source_image
+
+    sourcefilename = resultfilename  # Now saved file becomes new source file
+    source_image = result_image
+    Y, X, Z = (len(result_image), len(result_image[0]), len(result_image[0][0]))
+    preview_src = preview_filtered
+
+    # ↓ Returning method OptionMenu to 'None'
+    method_str.set('None')
+    # ↓ Disabling save
+    menu_file.entryconfig('Save', state='disabled')
+    sortir.unbind_all('<Control-s>')
+    # ↓ Binding switch on preview click
+    # zanyato.unbind('<Button-1>')  # left click
+    sortir.unbind_all('<space>')  # "Space" key
+    # ↓ Preview source
+    ShowPreview(preview_src, 'Source')
+    # ↓ Adding filename, mode and status to window title a-la Photoshop
+    sortir.title(f'{"" if makeup else f"{product_name}: "}{Path(sourcefilename).name}{color_mode_str}{"*" if is_filtered else ""}{f" | {product_name}" if makeup else ""}')
+    info_normal = {'txt': f'{Path(sourcefilename).name}{"*" if is_filtered else ""} X={X} Y={Y} Z={Z} maxcolors={maxcolors}', 'fg': 'grey', 'bg': 'grey90'}
+    UINormal()
+
+
+def Save(event=None) -> None:
+    """Once pressed on Save."""
+
+    global is_filtered, is_saved, operation, timing
+
+    operation = 'Saving'
+
+    if is_saved:  # block repetitive saving
+        return
+    if not is_filtered:  # block useless source resaving
+        return
+    resultfilename = sourcefilename
+    UIBusy()
+    start = time()
+    # ↓ Save format choice
+    if Path(resultfilename).suffix.lower() == '.png':
+        info['compression'] = 9  # Explicitly setting compression
+        list2png(resultfilename, result_image, info)  # Writing file
+    elif Path(resultfilename).suffix.lower() in ('.ppm', '.pgm', '.pnm'):
+        list2pnm(resultfilename, result_image, maxcolors)  # Writing file
+    timing = time() - start
+    # ↓ Flagging image as saved, not filtered
+    #   to block future repetitive saving
+    is_saved = True
+    is_filtered = False
+    onSave()
+    UINormal()
+
+
+def SaveAs(event=None) -> None:
+    """Once pressed on Save as..."""
+
+    global is_saved, is_filtered, operation, timing
+    global resultfilename
+
+    operation = 'Saving'
+
+    # ↓ Adjusting "Save as" formats to be displayed
+    #   according to bitdepth and source extension
+    src_extension = Path(sourcefilename).suffix.lower()
+    if Z == 1:
+        if src_extension in ('.pgm', '.pnm'):
+            format_list = [
+                ('Portable grey map', '.pgm'),
+                ('Portable network graphics', '.png'),
+            ]
+            proposed_name = f'{Path(sourcefilename).stem}_{method_str.get().replace("Scale", "")}.pgm'
+        else:
+            format_list = [
+                ('Portable network graphics', '.png'),
+                ('Portable grey map', '.pgm'),
+            ]
+            proposed_name = f'{Path(sourcefilename).stem}_{method_str.get().replace("Scale", "")}.png'
+    elif Z == 2:
+        format_list = [
+            ('Portable network graphics', '.png'),
+        ]
+        proposed_name = f'{Path(sourcefilename).stem}_{method_str.get().replace("Scale", "")}.png'
+    elif Z == 3:
+        if src_extension in ('.ppm', '.pnm'):
+            format_list = [
+                ('Portable pixel map', '.ppm'),
+                ('Portable network graphics', '.png'),
+            ]
+            f'{Path(sourcefilename).stem}_{method_str.get().replace("Scale", "")}.ppm'
+        else:
+            format_list = [
+                ('Portable network graphics', '.png'),
+                ('Portable pixel map', '.ppm'),
+            ]
+            proposed_name = f'{Path(sourcefilename).stem}_{method_str.get().replace("Scale", "")}.png'
+    else:
+        format_list = [
+            ('Portable network graphics', '.png'),
+        ]
+        proposed_name = f'{Path(sourcefilename).stem}_{method_str.get().replace("Scale", "")}.png'
+
+    # ↓ Open export file
+    resultfilename = asksaveasfilename(
+        title='Save image file',
+        parent=whoever,
+        filetypes=format_list,
+        defaultextension='.png',  # No extension should never happen but just in case
+        initialdir=Path(sourcefilename).parent,
+        initialfile=proposed_name,
+    )
+    if resultfilename == '':
+        return
+    UIBusy()
+    start = time()
+    # ↓ Save format choice
+    if Path(resultfilename).suffix.lower() == '.png':
+        info['compression'] = 9  # Explicitly setting compression
+        list2png(resultfilename, result_image, info)  # Writing file
+    elif Path(resultfilename).suffix.lower() in ('.ppm', '.pgm'):
+        list2pnm(resultfilename, result_image, maxcolors)  # Writing file
+    else:
+        raise ValueError('Extension not recognized')
+    timing = time() - start
+    # ↓ Flagging image as saved, not filtered, and disabling "Save"
+    #   to block future repetitive saving
+    is_saved = True
+    is_filtered = False
+    onSave()
+    UINormal()
+
+
+""" ╒══════════════╕
+    │ Initializing │
+    ╰──────────────╯ """
+product_name = 'Scaler Vi'
+"""Program name."""
+sourcefilename = ''
+"""Name of file to be opened."""
+zoom_factor = 0
+"""Current zoom. Midpoint value 0 correspond to 1:1 zoom."""
+view_src = True
+"""Whether source image should be shown rather than the result."""
+is_filtered = False
+"""Whether image filtering was performed."""
+is_saved = False
+"""Whether image was saved after filtering was performed."""
+operation = 'Awaiting orders'
+"""Name of most recent operation timing was calculated for."""
+timing = 0
+"""Execution time for most recent operation."""
+minizoom, maxizoom = (-19, 4)  # Zoom from 1:20 to 5:1
+"""`minizoom` is a maximal zoom out + 1 (image looks `mini`),
+   `maxizoom` is a maximal zoom in + 1 (image looks `maxi`)."""
+xr = xs = yr = ys = 0
+"""Viewpoint coordinates in source and result images.
+   Used for syncing viewpoint between source and scaled."""
+color_mode_str = ' '
+"""Info on the top of main `sortir` window"""
+
+some_help = (
+    'Preview area:',
+    '  <Double click> to open image,',
+    '  <Right click> or <Alt+F> for "File..." menu.',
+    'With image opened:',
+    '  <Ctrl+Click> to zoom in,',
+    '  <Alt+Click> to zoom out,',
+    '  <Ctrl+1> to zoom 1:1,',
+    '  <Mouse wheel> to zoom in/out,',
+    '  <Click+drag> to pan preview,',
+    '  <Enter> to rescale image.',
+    'With image rescaled:',
+    '  <Space> to switch source/result view.',
+)
+"""Help list(str) to be used for both main window and F1."""
+
+help_str = '\n'.join(some_help)
+"""Help str to be used for both main window and F1."""
+
+""" ╒═ Dictionaries ═════════════╕
+    │ Bindings, properties, etc. │
+    ╰────────────────────────────╯ """
+# ↓ Most common bindings dictionaries
+bind_all = {
+    '<Button-3>': ShowMenu,
+    '<Alt-f>': ShowMenu,
+    '<Alt-F>': ShowMenu,
+    '<F1>': ShowHelp,
+    '<Control-o>': GetSource,
+    '<Control-O>': GetSource,
+    '<Control-q>': DisMiss,
+    '<Control-Q>': DisMiss,
+    '<Control-w>': DisMiss,
+    '<Control-W>': DisMiss,
+}
+"""Main window bindings before image open."""
+bind = {
+    '<Motion>': canvasCoord,
+    '<B1-Motion>': canvasDrag,
+    '<Control-Button-1>': zoomIn,
+    '<Double-Control-Button-1>': zoomIn,
+    '<Control-+>': zoomIn,
+    '<Control-=>': zoomIn,
+    '<Alt-Button-1>': zoomOut,
+    '<Double-Alt-Button-1>': zoomOut,
+    '<Control-minus>': zoomOut,
+    '<Control-Key-1>': zoomOne,
+    '<Control-Alt-Key-0>': zoomOne,
+}
+"""Image Label bindings after image open."""
+# ↓ Info statuses dictionaries
+info_normal = {
+    'txt': f'{product_name} {__version__}',
+    'fg': 'grey',
+    'bg': 'grey90',
+}
+"""`info_string` properties in normal state"""
+info_busy = {
+    'txt': 'BUSY, PLEASE WAIT',
+    'fg': 'red',
+    'bg': 'yellow',
+}
+"""`info_string` properties in busy state"""
+
+# ↓ Command line options parsing, figuring out appropriate `makeup` value.
+parser = argparse.ArgumentParser(
+    description='Scaler Vi - visual ScaleNx shell',
+    usage='\n"python ScalerVi.py --makeup"  for modular GUI,\n"python ScalerVi.py --classic" for single window GUI.',
+)
+parser.add_argument('-m', '--makeup', action='store_true', default=True, help='Whether to force modular dialog.')
+parser.add_argument('-c', '--classic', action='store_true', default=False, help='Whether to force classic dialog.')
+args = parser.parse_args()
+makeup = args.makeup
+"""Whether to use modular dialog."""
+makeup = not args.classic
+
+
+""" ╔═══════════╗
+    ║ Main body ║
+    ╚═══════════╝ """
+sortir = Tk()
+"""Main dialog window."""
+icon_path = Path(__file__).resolve().parent / '32.ico'
+icon_photo = PhotoImage(data='P6\n3 3\n255\n'.encode(encoding='ascii') + randbytes(3 * 3 * 3))
+if icon_path.exists():
+    sortir.iconbitmap(icon_path)
+else:
+    sortir.iconphoto(True, icon_photo)
+sortir.title(product_name)
+
+whoever = sortir
+"""Parent window holding `frame_top` Frame containing controls.
+   Whoever controls `frame_top`, controls control."""
+
+""" ┌───────────────────────┐
+    │ Top window (controls) │
+    └──────────────────────-┘ """
+if makeup:
+    panel = Toplevel(sortir)
+    """Toplevel window for `frame_top` Frame."""
+    if icon_path.exists():
+        panel.iconbitmap(icon_path)
+    panel.title(f'{product_name} {__version__}')
+    sortir.protocol('WM_DELETE_WINDOW', lambda: None)
+    panel.protocol('WM_DELETE_WINDOW', DisMiss)
+    whoever = panel
+
+# ↓ Info string
+info_string = Label(
+    sortir,
+    text=info_normal['txt'],
+    font=('helvetica', 8),
+    foreground=info_normal['fg'],
+    background=info_normal['bg'],
+    relief='groove',
+)
+"""Info text label below main image, regularly updated."""
+info_string.pack(side='bottom', padx=0, pady=(2, 0), fill='both')
+
+""" ┌──────────────────────┐
+    │ Top frame (controls) │
+    └─────────────────────-┘ """
+frame_top = Frame(whoever, borderwidth=2, relief='groove')
+"""Frame containing controls."""
+frame_top.pack(side='top', anchor='nw', pady=2)
+
+# ↓ File menu
+butt_file = Menubutton(
+    frame_top,
+    text='File...',
+    width=8,
+    anchor='w',
+    font=('helvetica', 12),
+    cursor='hand2',
+    relief='groove',
+    activeforeground='dark blue',
+    activebackground='#E5F1FB',
+    border=2,
+    state='normal',
+    indicatoron=False,
+)
+"""File menu button."""
+butt_file.pack(side='left', fill='y', padx=(0, 6))
+
+menu_file = Menu(butt_file, tearoff=False)
+"""File menu."""
+menu_file.add_command(label='Open...', state='normal', command=GetSource, accelerator='Ctrl+O')
+menu_file.add_separator()
+menu_file.add_command(label='Save', state='disabled', command=Save, accelerator='Ctrl+S')
+menu_file.add_command(label='Save as...', state='disabled', command=SaveAs, accelerator='Ctrl+Shift+S')
+menu_file.add_separator()
+menu_file.add_command(label='Image Info...', accelerator='Ctrl+I', state='disabled', command=ShowInfo)
+menu_file.add_separator()
+menu_file.add_command(label='Help...', accelerator='F1', state='normal', command=ShowHelp)
+menu_file.add_separator()
+menu_file.add_command(label='Exit', state='normal', command=DisMiss, accelerator='Ctrl+Q')
+
+butt_file['menu'] = menu_file
+
+# ↓ Filter section begins
+info_method = Label(
+    frame_top,
+    text='Scaling method:',
+    font=('helvetica', 12, 'italic'),
+    foreground='brown',
+    state='disabled',
+)
+info_method.pack(side='left', fill='both', padx=6)
+
+method_str = StringVar(value='None')
+"""Name of scaling method chosen."""
+method_menu = OptionMenu(
+    frame_top,
+    method_str,
+    *[
+        'None',
+        'Scale2x',
+        'Scale3x',
+        'Scale2xSFX',
+        'Scale3xSFX',
+    ],
+)
+"""Scaling method choice menu."""
+method_menu.pack(side='left')
+method_menu.configure(  # configuring menu, it can't be done when declaring
+    font=('courier', 12),
+    width=10,
+    relief='groove',
+    activebackground='#E5F1FB',
+    state='disabled',
+)
+method_menu['menu'].configure(  # configuring menu item must be separate from menu
+    font=method_menu['font'],
+)
+method_str.trace_add('write', lambda *args: RunFilter())
+
+control_height = frame_top.winfo_reqheight() + 32
+"""Height to be subtracted from `sortir` to fit image in.
+   Either `frame_top` Frame height (normal dialog) or `0` (modular dialog)."""
+if makeup:
+    control_height = 32  # need some room for window title
+
+""" ┌──────────────────────────────┐
+    │ Center frame (image preview) │
+    └─────────────────────────────-┘ """
+frame_preview = LabelFrame(
+    sortir,
+    text='Preview area',
+    font=('helvetica', 8),
+    borderwidth=2,
+    relief='groove',
+)
+"""Frame containing main label (image preview) and zoom control subframe."""
+frame_preview.pack(side='top', anchor='center', expand=True)
+
+canvas = Canvas(
+    frame_preview,
+    borderwidth=1,
+    highlightthickness=1,
+)
+"""Canvas containing preview."""
+canvas.pack()
+
+zanyato = Label(
+    canvas,
+    text=help_str.replace('<', '').replace('>', ''),
+    font=('helvetica', 12),
+    justify='left',
+    padx=24,
+    pady=24,
+    borderwidth=2,
+    background='grey90',
+    relief='groove',
+)
+"""Main label containing canvas containing preview."""
+zanyato.pack(side='top')
+
+zanyato_ = canvas.create_window(
+    0,
+    0,
+    window=zanyato,
+    width=zanyato.winfo_reqwidth(),
+    height=zanyato.winfo_reqheight(),
+    anchor='nw',
+)
+"""Create/config canvas in main label."""
+
+canvas.config(
+    width=zanyato.winfo_reqwidth(),
+    height=zanyato.winfo_reqheight(),
+    scrollregion=(0, 0, zanyato.winfo_reqwidth(), zanyato.winfo_reqheight()),
+)
+
+frame_zoom = Frame(frame_preview, borderwidth=2, relief='groove')
+"""Zoom control subframe."""
+frame_zoom.pack(side='bottom')
+
+butt_plus = Button(frame_zoom, text='+', font=('courier', 8), width=2, cursor='arrow', state='disabled', borderwidth=1, command=zoomIn)
+butt_plus.pack(side='left', padx=0, pady=0, fill='both')
+
+butt_minus = Button(frame_zoom, text='-', font=('courier', 8), width=2, cursor='arrow', state='disabled', borderwidth=1, command=zoomOut)
+butt_minus.pack(side='right', padx=0, pady=0, fill='both')
+
+label_zoom = Label(frame_zoom, text='Zoom 1:1', font=('courier', 8), state='disabled')
+label_zoom.pack(side='left', anchor='n', padx=2, pady=0, fill='both')
+
+""" ┌─────────────────────────────────────────────┐
+    │ Binding everything that does not need image │
+    └────────────────────────────────────────────-┘ """
+# ↓ Info string binding for displaying scaler execution time
+info_string.bind('<Enter>', lambda event=None: info_string.config(text=f'{operation} time: {round(timing, 3)} sec'))
+info_string.bind('<Leave>', lambda event=None: info_string.config(text=info_normal['txt']))
+info_string.bind('<Control-Button-1>', lambda event=None: [sortir.clipboard_clear(), sortir.clipboard_append(f'{timing}\n')])
+# ↓ Double-click image area to "Open..."
+zanyato.bind('<Double-Button-1>', GetSource)
+frame_preview.bind('<Double-Button-1>', GetSource)
+# ↓ Whole sortir binding menu, "Open..." and "Exit"
+for happens, function in bind_all.items():
+    sortir.bind_all(happens, function)
+
+# ↓ Center window horizontally
+sortir.update()
+sortir.minsize(zanyato.winfo_width(), sortir.winfo_height())
+sortir.maxsize(9 * sortir.winfo_screenwidth() // 10, 9 * sortir.winfo_screenheight() // 10)
+if makeup:
+    whoever.update()
+    sortir.geometry(f'{sortir.winfo_reqwidth()}x{sortir.winfo_reqheight()}+{(sortir.winfo_screenwidth() - sortir.winfo_width() - whoever.winfo_width() + 128) // 2}+64')
+    sortir.update()
+    whoever.geometry(f'{whoever.winfo_reqwidth()}x{whoever.winfo_reqheight()}+{sortir.winfo_rootx() + sortir.winfo_width() - 64}+{sortir.winfo_rooty() + 96}')
+    whoever.resizable(False, False)
+    whoever.transient(sortir)  # sets 'whoever' to be always above 'sortir'
+    whoever.focus_set()
+else:
+    sortir.geometry(f'{sortir.winfo_reqwidth()}x{sortir.winfo_reqheight()}+{(sortir.winfo_screenwidth() - sortir.winfo_reqwidth()) // 2}+64')
+
+sortir.mainloop()

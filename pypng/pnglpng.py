@@ -1,0 +1,219 @@
+"""
+============
+PNG-list-PNG
+============
+--------------------------------------
+Joint between PyPNG and other programs
+--------------------------------------
+
+Overview
+--------
+
+**pnglpng** (png-list-png) is a suitable joint between `PyPNG`_ module
+and other Python programs, providing functions for data conversion
+from/to used by PyPNG to/from understandable by ordinary average developer
+of human origin.
+
+.. note:: This file is not a part of original PyPNG distribution.
+    It was created by a different person for this person's personal use.
+    Any copyright notices that may appear in this file do not apply to
+    original PyPNG. Any bugs introduced in this file are outside the area of
+    responsibility of original PyPNG developers.
+
+Functions included are:
+
+- ``png2list``: reading PNG file and returning all data;
+- ``list2png``: getting data and writing PNG file;
+- ``create_image``: creating empty nested 3D list for image representation.
+
+Installation
+------------
+
+Should be kept together with **``png.py``** file, which is a core file of
+original `PyPNG`_ module. See ``import`` for detail.
+
+Usage
+-----
+
+After ``import pnglpng``, use something like::
+
+    X, Y, Z, maxcolors, list_3d, info = pnglpng.png2list(in_filename, tuplevel)
+
+for reading data from PNG file, where:
+
+- ``X``, ``Y``, ``Z``: PNG image dimensions (int);
+- ``maxcolors``: maximum value of colors per channel for current image (int),
+  either 1, or 255, or 65535, for 1 bpc, 8 bpc and 16 bpc PNG respectively;
+- ``list_3d``: Y * X * Z list (image) of lists (rows) of lists (pixels) of
+  ints (channels), from PNG iDAT;
+- ``info``: dictionary of PNG chunks like resolution etc.,
+  as they are accessible by PyPNG;
+- ``tuplevel``: image representation switch:
+
+  - ``tuplevel='pixel'``: ``list_3d`` is list[list[tuple[int]]];
+  - ``tuplevel='image'``: ``list_3d`` is tuple[tuple[tuple[int]]];
+  - ``tuplevel=`` other: ``list_3d`` is list[list[list[int]]].
+
+and ::
+
+    pnglpng.list2png(out_filename, list_3d, info)
+
+for writing data as listed above to ``out_filename`` PNG.
+
+References
+----------
+
+1. `PyPNG`_ repository at Gitlab.
+2. `PyPNG Documentation`_ at Gitlab.
+
+.. _PyPNG: https://gitlab.com/drj11/pypng
+
+.. _PyPNG Documentation: https://drj11.gitlab.io/pypng
+
+"""
+
+__author__ = 'Ilya Razmanov'
+__copyright__ = '(c) 2024-2026 Ilya Razmanov'
+__credits__ = 'Ilya Razmanov'
+__license__ = 'unlicense'
+__version__ = '26.8.28.312'
+__maintainer__ = 'Ilya Razmanov'
+__email__ = 'ilyarazmanov@gmail.com'
+__status__ = 'Production'
+
+from typing import Literal
+
+from .png import Reader, Writer
+
+""" ╭──────────╮
+    │ png2list │
+    ╰──────────╯ """
+
+
+def png2list(in_filename: str, tuplevel: Literal['none', 'pixel', 'image'] | None = None) -> tuple[int, int, int, int, list[list[list[int]]] | list[list[tuple[int]]] | tuple[tuple[tuple[int]]], dict[str, int | bool | tuple | list[tuple]]]:
+    """Take PNG filename and return PNG data in a human-friendly form.
+
+    :param str in_filename: input file name;
+    :param tuplevel: switch ``list_3d`` structure
+
+        - ``tuplevel='image'``: ``list_3d`` is tuple[tuple[tuple[int]]];
+        - ``tuplevel='pixel'``: ``list_3d`` is list[list[tuple[int]]];
+        - ``tuplevel=`` other: ``list_3d`` is list[list[list[int]]].
+
+    :type tuplevel: str or None
+    :return X, Y, Z, maxcolors, list_3d, info: tuple, consisting of:
+
+        - **``X``**, **``Y``**, **``Z``**: PNG image dimensions (int);
+        - **``maxcolors``**: maximum value of colors per channel
+        for current image (int),
+        either 1, or 255, or 65535, for 1 bpc, 8 bpc and 16 bpc PNG,
+        respectively;
+        - **``list_3d``**: list/tuple (image) of lists/tuples (rows) of
+        lists/tuples (pixels) of ints (channel values), from PNG iDAT;
+        - **``info``**: dictionary of PNG chunks like resolution *etc.*,
+        as they are accessible by PyPNG.
+
+    """
+
+    source = Reader(in_filename)
+
+    # ↓ Opening image, iDAT comes to "pixels" generator
+    X, Y, pixels, info = source.asDirect()
+
+    Z = info['planes']  # Channels number
+    if info['bitdepth'] == 1:
+        maxcolors = 1  # Maximal value of a color for 1-bit / channel
+    elif info['bitdepth'] == 8:
+        maxcolors = 255  # Maximal value of a color for 8-bit / channel
+    elif info['bitdepth'] == 16:
+        maxcolors = 65535  # Maximal value of a color for 16-bit / channel
+
+    # ↓ Freezing tuple of bytes or whatever "pixels" generator returns
+    imagedata = tuple(pixels)
+
+    # ↓ Forcedly create 3D list/tuple of int out of "imagedata" tuple of hell knows what
+    if tuplevel == 'pixel':  # create list[list[tuple[int]]]
+        list_3d = [[tuple([int((imagedata[y])[(x * Z) + z]) for z in range(Z)]) for x in range(X)] for y in range(Y)]
+        return (X, Y, Z, maxcolors, list_3d, info)
+
+    if tuplevel == 'image':  # create tuple[tuple[tuple[int]]]
+        list_3d = tuple([tuple([tuple([int((imagedata[y])[(x * Z) + z]) for z in range(Z)]) for x in range(X)]) for y in range(Y)])
+        return (X, Y, Z, maxcolors, list_3d, info)
+
+    # ↓ If none of the 'tuplevel' above ensued, create list[list[list[int]]]
+    list_3d = [[[int((imagedata[y])[(x * Z) + z]) for z in range(Z)] for x in range(X)] for y in range(Y)]
+    return (X, Y, Z, maxcolors, list_3d, info)
+
+
+""" ╭──────────╮
+    │ list2png │
+    ╰──────────╯ """
+
+
+def list2png(out_filename: str, list_3d: list[list[list[int]]], info: dict[str, int | bool | tuple | list[tuple]]) -> None:
+    """Take filename and image data, and create PNG file.
+
+    :param list_3d: Y * X * Z list (image) of lists (rows) of lists (pixels)
+        of ints (channels);
+    :type list_3d: list[list[list[int]]
+    :param info: dictionary, chunks like resolution etc. as you want them
+        to be present in PNG;
+    :type info: dict[str, int | bool | tuple | list[tuple]]
+    :param str out_filename: output PNG file name (str).
+
+    .. note:: ``X``, ``Y`` and ``Z`` detected from the list structure
+       override those set in ``info``. Thus you don't have to edit ``info``
+       every time you resize image.
+    .. warning:: Correct ``info['bitdepth']`` is **critical**
+       because it cannot be detected from the list structure.
+
+    """
+
+    # ↓ Determining list dimensions
+    Y, X, Z = (len(list_3d), len(list_3d[0]), len(list_3d[0][0]))
+    # ↓ Ignoring any possible list channels above 4-th.
+    Z = min(Z, 4)
+
+    # ↓ Overwriting "info" properties with ones determined from the list.
+    #   Necessary when image is edited.
+    info['size'] = (X, Y)
+    info['planes'] = Z
+    # ↓ As image tend to get promoted to smooth color when editing,
+    #   we'd better remove palette from the very beginning.
+    info.pop('palette', None)  # Removes palette if any.
+    # ↓ As image tend to get promoted to smooth color when editing,
+    #   background must either be rebuilt to match channels structure every time,
+    #   or be deleted.
+    info.pop('background', None)  # Destroy is better than rebuild ;-)
+    #   info['background'] = (0,) * (Z - 1 + Z % 2)  # black for any color mode
+    if (Z % 2) == 1:
+        info['alpha'] = False
+    else:
+        info['alpha'] = True
+    if Z < 3:
+        info['greyscale'] = True
+    else:
+        info['greyscale'] = False
+
+    # ↓ Flattening 3D list to 2D list of rows for PNG `.write` method
+    def flatten_2d(list_3d: list[list[list[int]]]):
+        """Flatten `list_3d` to 2D list of rows, yield generator."""
+
+        yield from ([list_3d[y][x][z] for x in range(X) for z in range(Z)] for y in range(Y))
+
+    # ↓ Writing PNG with `.write` method (row by row),
+    #   using `flatten_2d` generator to save memory
+    writer = Writer(X, Y, **info)
+    with open(out_filename, 'wb') as result_png:
+        writer.write(result_png, flatten_2d(list_3d))
+
+
+""" ╭────────────────────╮
+    │ Create empty image │
+    ╰────────────────────╯ """
+
+
+def create_image(X: int, Y: int, Z: int) -> list[list[list[int]]]:
+    """Create zero-filled 3D nested list of X * Y * Z size."""
+
+    return [[[0 for z in range(Z)] for x in range(X)] for y in range(Y)]
